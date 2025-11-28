@@ -1,0 +1,6 @@
+kfp==1.8.22
+dvc
+scikit-learn
+pandas
+numpy
+mlflow
