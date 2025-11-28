@@ -1,0 +1,42 @@
+name: Data extraction
+description: Fetches the dataset. In a real MLOps environment, this would use
+inputs:
+- {name: data_url, type: String}
+outputs:
+- {name: output_csv, type: String}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'pandas' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'pandas' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
+      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+      \ndef data_extraction(data_url , output_csv ):\n    \"\"\"\n    Fetches the\
+      \ dataset. In a real MLOps environment, this would use \n    'dvc get' to pull\
+      \ from version control. Here we simulate it by \n    loading the raw data from\
+      \ a URL or local path.\n    \"\"\"\n    import pandas as pd\n\n    print(f\"\
+      Extraction: Loading data from {data_url}...\")\n    # Simulating DVC extraction\
+      \ by reading the file directly\n    df = pd.read_csv(data_url)\n\n    # Save\
+      \ the data to the output path so the next component can use it\n    df.to_csv(output_csv,\
+      \ index=False)\n    print(f\"Extraction: Data saved to {output_csv}\")\n\nimport\
+      \ argparse\n_parser = argparse.ArgumentParser(prog='Data extraction', description='Fetches\
+      \ the dataset. In a real MLOps environment, this would use')\n_parser.add_argument(\"\
+      --data-url\", dest=\"data_url\", type=str, required=True, default=argparse.SUPPRESS)\n\
+      _parser.add_argument(\"--output-csv\", dest=\"output_csv\", type=_make_parent_dirs_and_return_path,\
+      \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+      \n_outputs = data_extraction(**_parsed_args)\n"
+    args:
+    - --data-url
+    - {inputValue: data_url}
+    - --output-csv
+    - {outputPath: output_csv}

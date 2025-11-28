@@ -1,0 +1,496 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: boston-housing-mlops-pipeline-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22, pipelines.kubeflow.org/pipeline_compilation_time: '2025-11-29T00:13:58.751257',
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "A pipeline that trains
+      a model on Boston housing data.", "inputs": [{"default": "https://raw.githubusercontent.com/selva86/datasets/master/BostonHousing.csv",
+      "name": "data_url", "optional": true, "type": "String"}, {"default": "100",
+      "name": "n_estimators", "optional": true, "type": "Integer"}, {"default": "10",
+      "name": "max_depth", "optional": true, "type": "Integer"}], "name": "Boston
+      Housing MLOps Pipeline"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.22}
+spec:
+  entrypoint: boston-housing-mlops-pipeline
+  templates:
+  - name: boston-housing-mlops-pipeline
+    inputs:
+      parameters:
+      - {name: data_url}
+      - {name: max_depth}
+      - {name: n_estimators}
+    dag:
+      tasks:
+      - {name: create-volume, template: create-volume}
+      - name: data-extraction
+        template: data-extraction
+        dependencies: [create-volume]
+        arguments:
+          parameters:
+          - {name: create-volume-name, value: '{{tasks.create-volume.outputs.parameters.create-volume-name}}'}
+          - {name: data_url, value: '{{inputs.parameters.data_url}}'}
+      - name: data-preprocessing
+        template: data-preprocessing
+        dependencies: [create-volume, data-extraction]
+        arguments:
+          parameters:
+          - {name: create-volume-name, value: '{{tasks.create-volume.outputs.parameters.create-volume-name}}'}
+          artifacts:
+          - {name: data-extraction-output_csv, from: '{{tasks.data-extraction.outputs.artifacts.data-extraction-output_csv}}'}
+      - name: model-evaluation
+        template: model-evaluation
+        dependencies: [create-volume, data-preprocessing, model-training]
+        arguments:
+          parameters:
+          - {name: create-volume-name, value: '{{tasks.create-volume.outputs.parameters.create-volume-name}}'}
+          artifacts:
+          - {name: data-preprocessing-test_csv, from: '{{tasks.data-preprocessing.outputs.artifacts.data-preprocessing-test_csv}}'}
+          - {name: model-training-model_pkl, from: '{{tasks.model-training.outputs.artifacts.model-training-model_pkl}}'}
+      - name: model-training
+        template: model-training
+        dependencies: [create-volume, data-preprocessing]
+        arguments:
+          parameters:
+          - {name: create-volume-name, value: '{{tasks.create-volume.outputs.parameters.create-volume-name}}'}
+          - {name: max_depth, value: '{{inputs.parameters.max_depth}}'}
+          - {name: n_estimators, value: '{{inputs.parameters.n_estimators}}'}
+          artifacts:
+          - {name: data-preprocessing-train_csv, from: '{{tasks.data-preprocessing.outputs.artifacts.data-preprocessing-train_csv}}'}
+  - name: create-volume
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: '{{workflow.name}}-data-volume'
+        spec:
+          accessModes:
+          - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+    outputs:
+      parameters:
+      - name: create-volume-manifest
+        valueFrom: {jsonPath: '{}'}
+      - name: create-volume-name
+        valueFrom: {jsonPath: '{.metadata.name}'}
+      - name: create-volume-size
+        valueFrom: {jsonPath: '{.status.capacity.storage}'}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+  - name: data-extraction
+    container:
+      args: [--data-url, '{{inputs.parameters.data_url}}', --output-csv, /tmp/outputs/output_csv/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+        --no-warn-script-location 'pandas' --user) && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef data_extraction(data_url , output_csv ):\n    \"\"\"\n    Fetches the\
+        \ dataset. In a real MLOps environment, this would use \n    'dvc get' to\
+        \ pull from version control. Here we simulate it by \n    loading the raw\
+        \ data from a URL or local path.\n    \"\"\"\n    import pandas as pd\n\n\
+        \    print(f\"Extraction: Loading data from {data_url}...\")\n    # Simulating\
+        \ DVC extraction by reading the file directly\n    df = pd.read_csv(data_url)\n\
+        \n    # Save the data to the output path so the next component can use it\n\
+        \    df.to_csv(output_csv, index=False)\n    print(f\"Extraction: Data saved\
+        \ to {output_csv}\")\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Data\
+        \ extraction', description='Fetches the dataset. In a real MLOps environment,\
+        \ this would use')\n_parser.add_argument(\"--data-url\", dest=\"data_url\"\
+        , type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --output-csv\", dest=\"output_csv\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+        \n_outputs = data_extraction(**_parsed_args)\n"
+      image: python:3.9
+      volumeMounts:
+      - {mountPath: /data, name: create-volume}
+    inputs:
+      parameters:
+      - {name: create-volume-name}
+      - {name: data_url}
+    outputs:
+      artifacts:
+      - {name: data-extraction-output_csv, path: /tmp/outputs/output_csv/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Fetches
+          the dataset. In a real MLOps environment, this would use", "implementation":
+          {"container": {"args": ["--data-url", {"inputValue": "data_url"}, "--output-csv",
+          {"outputPath": "output_csv"}], "command": ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1
+          python3 -m pip install --quiet --no-warn-script-location ''pandas'' || PIP_DISABLE_PIP_VERSION_CHECK=1
+          python3 -m pip install --quiet --no-warn-script-location ''pandas'' --user)
+          && \"$0\" \"$@\"", "sh", "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\"
+          > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef data_extraction(data_url , output_csv ):\n    \"\"\"\n    Fetches
+          the dataset. In a real MLOps environment, this would use \n    ''dvc get''
+          to pull from version control. Here we simulate it by \n    loading the raw
+          data from a URL or local path.\n    \"\"\"\n    import pandas as pd\n\n    print(f\"Extraction:
+          Loading data from {data_url}...\")\n    # Simulating DVC extraction by reading
+          the file directly\n    df = pd.read_csv(data_url)\n\n    # Save the data
+          to the output path so the next component can use it\n    df.to_csv(output_csv,
+          index=False)\n    print(f\"Extraction: Data saved to {output_csv}\")\n\nimport
+          argparse\n_parser = argparse.ArgumentParser(prog=''Data extraction'', description=''Fetches
+          the dataset. In a real MLOps environment, this would use'')\n_parser.add_argument(\"--data-url\",
+          dest=\"data_url\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output-csv\",
+          dest=\"output_csv\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = data_extraction(**_parsed_args)\n"], "image": "python:3.9"}}, "inputs":
+          [{"name": "data_url", "type": "String"}], "name": "Data extraction", "outputs":
+          [{"name": "output_csv", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "a0813f00c448534e6466aef4a776e6ccd20afe12ccd98ab5742406bcde1635de", "url":
+          "components/data_extraction.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"data_url":
+          "{{inputs.parameters.data_url}}"}'}
+    volumes:
+    - name: create-volume
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.create-volume-name}}'}
+  - name: data-preprocessing
+    container:
+      args: [--input-csv, /tmp/inputs/input_csv/data, --train-csv, /tmp/outputs/train_csv/data,
+        --test-csv, /tmp/outputs/test_csv/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'scikit-learn' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip
+        install --quiet --no-warn-script-location 'pandas' 'scikit-learn' --user)
+        && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef data_preprocessing(input_csv , \n                       train_csv ,\n\
+        \                       test_csv ):\n    \"\"\"\n    Cleans, scales, and splits\
+        \ the data into train and test sets.\n    \"\"\"\n    import pandas as pd\n\
+        \    from sklearn.model_selection import train_test_split\n\n    print(\"\
+        Preprocessing: Reading data...\")\n    df = pd.read_csv(input_csv)\n\n   \
+        \ # Cleaning: Drop missing values\n    df = df.dropna()\n\n    # Splitting:\
+        \ 80% Train, 20% Test\n    train, test = train_test_split(df, test_size=0.2,\
+        \ random_state=42)\n\n    # Output the split files\n    train.to_csv(train_csv,\
+        \ index=False)\n    test.to_csv(test_csv, index=False)\n    print(f\"Preprocessing:\
+        \ Split completed. Train shape: {train.shape}, Test shape: {test.shape}\"\
+        )\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Data preprocessing',\
+        \ description='Cleans, scales, and splits the data into train and test sets.')\n\
+        _parser.add_argument(\"--input-csv\", dest=\"input_csv\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-csv\", dest=\"\
+        train_csv\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--test-csv\", dest=\"test_csv\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+        \n_outputs = data_preprocessing(**_parsed_args)\n"
+      image: python:3.9
+      volumeMounts:
+      - {mountPath: /data, name: create-volume}
+    inputs:
+      parameters:
+      - {name: create-volume-name}
+      artifacts:
+      - {name: data-extraction-output_csv, path: /tmp/inputs/input_csv/data}
+    outputs:
+      artifacts:
+      - {name: data-preprocessing-test_csv, path: /tmp/outputs/test_csv/data}
+      - {name: data-preprocessing-train_csv, path: /tmp/outputs/train_csv/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Cleans,
+          scales, and splits the data into train and test sets.", "implementation":
+          {"container": {"args": ["--input-csv", {"inputPath": "input_csv"}, "--train-csv",
+          {"outputPath": "train_csv"}, "--test-csv", {"outputPath": "test_csv"}],
+          "command": ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip
+          install --quiet --no-warn-script-location ''pandas'' ''scikit-learn'' ||
+          PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+          ''pandas'' ''scikit-learn'' --user) && \"$0\" \"$@\"", "sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef data_preprocessing(input_csv
+          , \n                       train_csv ,\n                       test_csv
+          ):\n    \"\"\"\n    Cleans, scales, and splits the data into train and test
+          sets.\n    \"\"\"\n    import pandas as pd\n    from sklearn.model_selection
+          import train_test_split\n\n    print(\"Preprocessing: Reading data...\")\n    df
+          = pd.read_csv(input_csv)\n\n    # Cleaning: Drop missing values\n    df
+          = df.dropna()\n\n    # Splitting: 80% Train, 20% Test\n    train, test =
+          train_test_split(df, test_size=0.2, random_state=42)\n\n    # Output the
+          split files\n    train.to_csv(train_csv, index=False)\n    test.to_csv(test_csv,
+          index=False)\n    print(f\"Preprocessing: Split completed. Train shape:
+          {train.shape}, Test shape: {test.shape}\")\n\nimport argparse\n_parser =
+          argparse.ArgumentParser(prog=''Data preprocessing'', description=''Cleans,
+          scales, and splits the data into train and test sets.'')\n_parser.add_argument(\"--input-csv\",
+          dest=\"input_csv\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-csv\",
+          dest=\"train_csv\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-csv\", dest=\"test_csv\",
+          type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n_parsed_args
+          = vars(_parser.parse_args())\n\n_outputs = data_preprocessing(**_parsed_args)\n"],
+          "image": "python:3.9"}}, "inputs": [{"name": "input_csv", "type": "String"}],
+          "name": "Data preprocessing", "outputs": [{"name": "train_csv", "type":
+          "String"}, {"name": "test_csv", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "317cbad2027a79694c556e0a947b3d15f507f6b912cf26ab1458822e2888f054", "url":
+          "components/data_preprocessing.yaml"}'}
+    volumes:
+    - name: create-volume
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.create-volume-name}}'}
+  - name: model-evaluation
+    container:
+      args: [--test-csv, /tmp/inputs/test_csv/data, --model-pkl, /tmp/inputs/model_pkl/data,
+        --metrics-json, /tmp/outputs/metrics_json/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'scikit-learn' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip
+        install --quiet --no-warn-script-location 'pandas' 'scikit-learn' --user)
+        && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def _make_parent_dirs_and_return_path(file_path: str):
+            import os
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            return file_path
+
+        def model_evaluation(test_csv ,
+                             model_pkl ,
+                             metrics_json ):
+            """
+            Evaluates the model and saves metrics to a JSON file.
+            """
+            import pandas as pd
+            import pickle
+            import json
+            from sklearn.metrics import mean_squared_error, r2_score
+
+            print("Evaluation: Loading test data and model...")
+            df = pd.read_csv(test_csv)
+            X_test = df.drop('MEDV', axis=1)
+            y_test = df['MEDV']
+
+            with open(model_pkl, 'rb') as f:
+                model = pickle.load(f)
+
+            # Predict and Calculate Metrics
+            predictions = model.predict(X_test)
+            mse = mean_squared_error(y_test, predictions)
+            r2 = r2_score(y_test, predictions)
+
+            print(f"Evaluation Results -> MSE: {mse}, R2: {r2}")
+
+            # Save metrics in Kubeflow format
+            metrics = {
+                "metrics": [
+                    {"name": "Mean Squared Error", "numberValue": mse},
+                    {"name": "R2 Score", "numberValue": r2},
+                ]
+            }
+
+            with open(metrics_json, 'w') as f:
+                json.dump(metrics, f)
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Model evaluation', description='Evaluates the model and saves metrics to a JSON file.')
+        _parser.add_argument("--test-csv", dest="test_csv", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--model-pkl", dest="model_pkl", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--metrics-json", dest="metrics_json", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+        _parsed_args = vars(_parser.parse_args())
+
+        _outputs = model_evaluation(**_parsed_args)
+      image: python:3.9
+      volumeMounts:
+      - {mountPath: /data, name: create-volume}
+    inputs:
+      parameters:
+      - {name: create-volume-name}
+      artifacts:
+      - {name: model-training-model_pkl, path: /tmp/inputs/model_pkl/data}
+      - {name: data-preprocessing-test_csv, path: /tmp/inputs/test_csv/data}
+    outputs:
+      artifacts:
+      - {name: model-evaluation-metrics_json, path: /tmp/outputs/metrics_json/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Evaluates
+          the model and saves metrics to a JSON file.", "implementation": {"container":
+          {"args": ["--test-csv", {"inputPath": "test_csv"}, "--model-pkl", {"inputPath":
+          "model_pkl"}, "--metrics-json", {"outputPath": "metrics_json"}], "command":
+          ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+          --no-warn-script-location ''pandas'' ''scikit-learn'' || PIP_DISABLE_PIP_VERSION_CHECK=1
+          python3 -m pip install --quiet --no-warn-script-location ''pandas'' ''scikit-learn''
+          --user) && \"$0\" \"$@\"", "sh", "-ec", "program_path=$(mktemp)\nprintf
+          \"%s\" \"$0\" > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n",
+          "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n    os.makedirs(os.path.dirname(file_path),
+          exist_ok=True)\n    return file_path\n\ndef model_evaluation(test_csv ,\n                     model_pkl
+          ,\n                     metrics_json ):\n    \"\"\"\n    Evaluates the model
+          and saves metrics to a JSON file.\n    \"\"\"\n    import pandas as pd\n    import
+          pickle\n    import json\n    from sklearn.metrics import mean_squared_error,
+          r2_score\n\n    print(\"Evaluation: Loading test data and model...\")\n    df
+          = pd.read_csv(test_csv)\n    X_test = df.drop(''MEDV'', axis=1)\n    y_test
+          = df[''MEDV'']\n\n    with open(model_pkl, ''rb'') as f:\n        model
+          = pickle.load(f)\n\n    # Predict and Calculate Metrics\n    predictions
+          = model.predict(X_test)\n    mse = mean_squared_error(y_test, predictions)\n    r2
+          = r2_score(y_test, predictions)\n\n    print(f\"Evaluation Results -> MSE:
+          {mse}, R2: {r2}\")\n\n    # Save metrics in Kubeflow format\n    metrics
+          = {\n        \"metrics\": [\n            {\"name\": \"Mean Squared Error\",
+          \"numberValue\": mse},\n            {\"name\": \"R2 Score\", \"numberValue\":
+          r2},\n        ]\n    }\n\n    with open(metrics_json, ''w'') as f:\n        json.dump(metrics,
+          f)\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Model evaluation'',
+          description=''Evaluates the model and saves metrics to a JSON file.'')\n_parser.add_argument(\"--test-csv\",
+          dest=\"test_csv\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-pkl\",
+          dest=\"model_pkl\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--metrics-json\",
+          dest=\"metrics_json\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = model_evaluation(**_parsed_args)\n"], "image": "python:3.9"}}, "inputs":
+          [{"name": "test_csv", "type": "String"}, {"name": "model_pkl", "type": "String"}],
+          "name": "Model evaluation", "outputs": [{"name": "metrics_json", "type":
+          "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest": "103d51b5530d6f70d72a5307be76a8435ff6c14bd66ef847c8dd79b2feb83292",
+          "url": "components/model_evaluation.yaml"}'}
+    volumes:
+    - name: create-volume
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.create-volume-name}}'}
+  - name: model-training
+    container:
+      args: [--train-csv, /tmp/inputs/train_csv/data, --n-estimators, '{{inputs.parameters.n_estimators}}',
+        --max-depth, '{{inputs.parameters.max_depth}}', --model-pkl, /tmp/outputs/model_pkl/data]
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'scikit-learn' 'mlflow' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+        -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn' 'mlflow'
+        --user) && "$0" "$@"
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n \
+        \   os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+        \ndef model_training(train_csv ,\n                   model_pkl ,\n       \
+        \            n_estimators  = 100,\n                   max_depth  = 10):\n\
+        \    \"\"\"\n    Trains a Random Forest Regressor and logs metrics to MLflow.\n\
+        \    \"\"\"\n    import pandas as pd\n    import mlflow\n    import mlflow.sklearn\n\
+        \    import pickle\n    from sklearn.ensemble import RandomForestRegressor\n\
+        \n    print(\"Training: Loading training data...\")\n    df = pd.read_csv(train_csv)\n\
+        \n    # Define features (X) and target (y) - Assuming 'MEDV' is the target\
+        \ for Boston Housing\n    X = df.drop('MEDV', axis=1)\n    y = df['MEDV']\n\
+        \n    # --- MLflow Setup ---\n    # In a real cluster, this URI points to\
+        \ a server. \n    # For local/assignment, we save to a local folder.\n   \
+        \ mlflow.set_tracking_uri(\"file:///mlflow\") \n    mlflow.set_experiment(\"\
+        Boston_Housing_Experiment\")\n\n    with mlflow.start_run():\n        # Log\
+        \ Hyperparameters\n        mlflow.log_param(\"n_estimators\", n_estimators)\n\
+        \        mlflow.log_param(\"max_depth\", max_depth)\n\n        # Initialize\
+        \ and Train Model\n        model = RandomForestRegressor(n_estimators=n_estimators,\
+        \ max_depth=max_depth, random_state=42)\n        model.fit(X, y)\n\n     \
+        \   # Log Model to MLflow\n        mlflow.sklearn.log_model(model, \"random_forest_model\"\
+        )\n        print(\"Training: Model trained and logged to MLflow.\")\n\n  \
+        \      # Save Model Artifact for Kubeflow passing\n        with open(model_pkl,\
+        \ 'wb') as f:\n            pickle.dump(model, f)\n\nimport argparse\n_parser\
+        \ = argparse.ArgumentParser(prog='Model training', description='Trains a Random\
+        \ Forest Regressor and logs metrics to MLflow.')\n_parser.add_argument(\"\
+        --train-csv\", dest=\"train_csv\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--n-estimators\", dest=\"n_estimators\", type=int,\
+        \ required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--max-depth\"\
+        , dest=\"max_depth\", type=int, required=False, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--model-pkl\", dest=\"model_pkl\", type=_make_parent_dirs_and_return_path,\
+        \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+        \n_outputs = model_training(**_parsed_args)\n"
+      image: python:3.9
+      volumeMounts:
+      - {mountPath: /data, name: create-volume}
+    inputs:
+      parameters:
+      - {name: create-volume-name}
+      - {name: max_depth}
+      - {name: n_estimators}
+      artifacts:
+      - {name: data-preprocessing-train_csv, path: /tmp/inputs/train_csv/data}
+    outputs:
+      artifacts:
+      - {name: model-training-model_pkl, path: /tmp/outputs/model_pkl/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Trains
+          a Random Forest Regressor and logs metrics to MLflow.", "implementation":
+          {"container": {"args": ["--train-csv", {"inputPath": "train_csv"}, {"if":
+          {"cond": {"isPresent": "n_estimators"}, "then": ["--n-estimators", {"inputValue":
+          "n_estimators"}]}}, {"if": {"cond": {"isPresent": "max_depth"}, "then":
+          ["--max-depth", {"inputValue": "max_depth"}]}}, "--model-pkl", {"outputPath":
+          "model_pkl"}], "command": ["sh", "-c", "(PIP_DISABLE_PIP_VERSION_CHECK=1
+          python3 -m pip install --quiet --no-warn-script-location ''pandas'' ''scikit-learn''
+          ''mlflow'' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+          --no-warn-script-location ''pandas'' ''scikit-learn'' ''mlflow'' --user)
+          && \"$0\" \"$@\"", "sh", "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\"
+          > \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n", "def _make_parent_dirs_and_return_path(file_path:
+          str):\n    import os\n    os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return
+          file_path\n\ndef model_training(train_csv ,\n                   model_pkl
+          ,\n                   n_estimators  = 100,\n                   max_depth  =
+          10):\n    \"\"\"\n    Trains a Random Forest Regressor and logs metrics
+          to MLflow.\n    \"\"\"\n    import pandas as pd\n    import mlflow\n    import
+          mlflow.sklearn\n    import pickle\n    from sklearn.ensemble import RandomForestRegressor\n\n    print(\"Training:
+          Loading training data...\")\n    df = pd.read_csv(train_csv)\n\n    # Define
+          features (X) and target (y) - Assuming ''MEDV'' is the target for Boston
+          Housing\n    X = df.drop(''MEDV'', axis=1)\n    y = df[''MEDV'']\n\n    #
+          --- MLflow Setup ---\n    # In a real cluster, this URI points to a server.
+          \n    # For local/assignment, we save to a local folder.\n    mlflow.set_tracking_uri(\"file:///mlflow\")
+          \n    mlflow.set_experiment(\"Boston_Housing_Experiment\")\n\n    with mlflow.start_run():\n        #
+          Log Hyperparameters\n        mlflow.log_param(\"n_estimators\", n_estimators)\n        mlflow.log_param(\"max_depth\",
+          max_depth)\n\n        # Initialize and Train Model\n        model = RandomForestRegressor(n_estimators=n_estimators,
+          max_depth=max_depth, random_state=42)\n        model.fit(X, y)\n\n        #
+          Log Model to MLflow\n        mlflow.sklearn.log_model(model, \"random_forest_model\")\n        print(\"Training:
+          Model trained and logged to MLflow.\")\n\n        # Save Model Artifact
+          for Kubeflow passing\n        with open(model_pkl, ''wb'') as f:\n            pickle.dump(model,
+          f)\n\nimport argparse\n_parser = argparse.ArgumentParser(prog=''Model training'',
+          description=''Trains a Random Forest Regressor and logs metrics to MLflow.'')\n_parser.add_argument(\"--train-csv\",
+          dest=\"train_csv\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--n-estimators\",
+          dest=\"n_estimators\", type=int, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--max-depth\",
+          dest=\"max_depth\", type=int, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-pkl\",
+          dest=\"model_pkl\", type=_make_parent_dirs_and_return_path, required=True,
+          default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
+          = model_training(**_parsed_args)\n"], "image": "python:3.9"}}, "inputs":
+          [{"name": "train_csv", "type": "String"}, {"default": "100", "name": "n_estimators",
+          "optional": true, "type": "Integer"}, {"default": "10", "name": "max_depth",
+          "optional": true, "type": "Integer"}], "name": "Model training", "outputs":
+          [{"name": "model_pkl", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "5e1ad451af60147dfad1fd7a493b3a355cc33473e1dbb7031dfae4975e8f8386", "url":
+          "components/model_training.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"max_depth":
+          "{{inputs.parameters.max_depth}}", "n_estimators": "{{inputs.parameters.n_estimators}}"}'}
+    volumes:
+    - name: create-volume
+      persistentVolumeClaim: {claimName: '{{inputs.parameters.create-volume-name}}'}
+  arguments:
+    parameters:
+    - {name: data_url, value: 'https://raw.githubusercontent.com/selva86/datasets/master/BostonHousing.csv'}
+    - {name: n_estimators, value: '100'}
+    - {name: max_depth, value: '10'}
+  serviceAccountName: pipeline-runner

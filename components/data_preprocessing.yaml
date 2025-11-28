@@ -1,0 +1,49 @@
+name: Data preprocessing
+description: Cleans, scales, and splits the data into train and test sets.
+inputs:
+- {name: input_csv, type: String}
+outputs:
+- {name: train_csv, type: String}
+- {name: test_csv, type: String}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'pandas' 'scikit-learn' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+      --quiet --no-warn-script-location 'pandas' 'scikit-learn' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
+      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+      \ndef data_preprocessing(input_csv , \n                       train_csv ,\n\
+      \                       test_csv ):\n    \"\"\"\n    Cleans, scales, and splits\
+      \ the data into train and test sets.\n    \"\"\"\n    import pandas as pd\n\
+      \    from sklearn.model_selection import train_test_split\n\n    print(\"Preprocessing:\
+      \ Reading data...\")\n    df = pd.read_csv(input_csv)\n\n    # Cleaning: Drop\
+      \ missing values\n    df = df.dropna()\n\n    # Splitting: 80% Train, 20% Test\n\
+      \    train, test = train_test_split(df, test_size=0.2, random_state=42)\n\n\
+      \    # Output the split files\n    train.to_csv(train_csv, index=False)\n  \
+      \  test.to_csv(test_csv, index=False)\n    print(f\"Preprocessing: Split completed.\
+      \ Train shape: {train.shape}, Test shape: {test.shape}\")\n\nimport argparse\n\
+      _parser = argparse.ArgumentParser(prog='Data preprocessing', description='Cleans,\
+      \ scales, and splits the data into train and test sets.')\n_parser.add_argument(\"\
+      --input-csv\", dest=\"input_csv\", type=str, required=True, default=argparse.SUPPRESS)\n\
+      _parser.add_argument(\"--train-csv\", dest=\"train_csv\", type=_make_parent_dirs_and_return_path,\
+      \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-csv\"\
+      , dest=\"test_csv\", type=_make_parent_dirs_and_return_path, required=True,\
+      \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+      _outputs = data_preprocessing(**_parsed_args)\n"
+    args:
+    - --input-csv
+    - {inputPath: input_csv}
+    - --train-csv
+    - {outputPath: train_csv}
+    - --test-csv
+    - {outputPath: test_csv}

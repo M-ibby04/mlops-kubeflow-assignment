@@ -1,0 +1,69 @@
+name: Model training
+description: Trains a Random Forest Regressor and logs metrics to MLflow.
+inputs:
+- {name: train_csv, type: String}
+- {name: n_estimators, type: Integer, default: '100', optional: true}
+- {name: max_depth, type: Integer, default: '10', optional: true}
+outputs:
+- {name: model_pkl, type: String}
+implementation:
+  container:
+    image: python:3.9
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'pandas' 'scikit-learn' 'mlflow' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+      -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn' 'mlflow'
+      --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
+      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+      \ndef model_training(train_csv ,\n                   model_pkl ,\n         \
+      \          n_estimators  = 100,\n                   max_depth  = 10):\n    \"\
+      \"\"\n    Trains a Random Forest Regressor and logs metrics to MLflow.\n   \
+      \ \"\"\"\n    import pandas as pd\n    import mlflow\n    import mlflow.sklearn\n\
+      \    import pickle\n    from sklearn.ensemble import RandomForestRegressor\n\
+      \n    print(\"Training: Loading training data...\")\n    df = pd.read_csv(train_csv)\n\
+      \n    # Define features (X) and target (y) - Assuming 'MEDV' is the target for\
+      \ Boston Housing\n    X = df.drop('MEDV', axis=1)\n    y = df['MEDV']\n\n  \
+      \  # --- MLflow Setup ---\n    # In a real cluster, this URI points to a server.\
+      \ \n    # For local/assignment, we save to a local folder.\n    mlflow.set_tracking_uri(\"\
+      file:///mlflow\") \n    mlflow.set_experiment(\"Boston_Housing_Experiment\"\
+      )\n\n    with mlflow.start_run():\n        # Log Hyperparameters\n        mlflow.log_param(\"\
+      n_estimators\", n_estimators)\n        mlflow.log_param(\"max_depth\", max_depth)\n\
+      \n        # Initialize and Train Model\n        model = RandomForestRegressor(n_estimators=n_estimators,\
+      \ max_depth=max_depth, random_state=42)\n        model.fit(X, y)\n\n       \
+      \ # Log Model to MLflow\n        mlflow.sklearn.log_model(model, \"random_forest_model\"\
+      )\n        print(\"Training: Model trained and logged to MLflow.\")\n\n    \
+      \    # Save Model Artifact for Kubeflow passing\n        with open(model_pkl,\
+      \ 'wb') as f:\n            pickle.dump(model, f)\n\nimport argparse\n_parser\
+      \ = argparse.ArgumentParser(prog='Model training', description='Trains a Random\
+      \ Forest Regressor and logs metrics to MLflow.')\n_parser.add_argument(\"--train-csv\"\
+      , dest=\"train_csv\", type=str, required=True, default=argparse.SUPPRESS)\n\
+      _parser.add_argument(\"--n-estimators\", dest=\"n_estimators\", type=int, required=False,\
+      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--max-depth\", dest=\"\
+      max_depth\", type=int, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+      --model-pkl\", dest=\"model_pkl\", type=_make_parent_dirs_and_return_path, required=True,\
+      \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+      _outputs = model_training(**_parsed_args)\n"
+    args:
+    - --train-csv
+    - {inputPath: train_csv}
+    - if:
+        cond: {isPresent: n_estimators}
+        then:
+        - --n-estimators
+        - {inputValue: n_estimators}
+    - if:
+        cond: {isPresent: max_depth}
+        then:
+        - --max-depth
+        - {inputValue: max_depth}
+    - --model-pkl
+    - {outputPath: model_pkl}

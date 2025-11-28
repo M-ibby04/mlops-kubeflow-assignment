@@ -1,0 +1,38 @@
+name: MLOps Pipeline CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-compile:
+    runs-on: ubuntu-latest
+
+    steps:
+    #Checkout the code from your repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    #Set up Python environment
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.9"
+
+    #Install Dependencies (kfp, dvc, etc.)
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install kfp==1.8.22 scikit-learn pandas numpy mlflow dvc
+
+    #Compile the Pipeline (This is the test)
+    - name: Compile Pipeline
+      run: |
+        python src/pipeline.py
+    
+    #Verify the pipeline.yaml was created
+    - name: Verify Output
+      run: |
+        ls -l pipeline.yaml
